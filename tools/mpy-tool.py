@@ -45,7 +45,7 @@ import sys
 import struct
 from collections import namedtuple
 
-sys.path.append('../py')
+sys.path.append(sys.path[0] + '/../py')
 import makeqstrdata as qstrutil
 
 class FreezeError(Exception):
@@ -57,6 +57,7 @@ class FreezeError(Exception):
         return 'error while freezing %s: %s' % (self.rawcode.source_file, self.msg)
 
 class Config:
+    MPY_VERSION = 3
     MICROPY_LONGINT_IMPL_NONE = 0
     MICROPY_LONGINT_IMPL_LONGLONG = 1
     MICROPY_LONGINT_IMPL_MPZ = 2
@@ -72,9 +73,9 @@ MP_BC_MAKE_CLOSURE = 0x62
 MP_BC_MAKE_CLOSURE_DEFARGS = 0x63
 MP_BC_RAISE_VARARGS = 0x5c
 # extra byte if caching enabled:
-MP_BC_LOAD_NAME = 0x1c
-MP_BC_LOAD_GLOBAL = 0x1d
-MP_BC_LOAD_ATTR = 0x1e
+MP_BC_LOAD_NAME = 0x1b
+MP_BC_LOAD_GLOBAL = 0x1c
+MP_BC_LOAD_ATTR = 0x1d
 MP_BC_STORE_ATTR = 0x26
 
 def make_opcode_format():
@@ -93,7 +94,7 @@ def make_opcode_format():
     OC4(U, U, U, U), # 0x0c-0x0f
     OC4(B, B, B, U), # 0x10-0x13
     OC4(V, U, Q, V), # 0x14-0x17
-    OC4(B, U, V, V), # 0x18-0x1b
+    OC4(B, V, V, Q), # 0x18-0x1b
     OC4(Q, Q, Q, Q), # 0x1c-0x1f
     OC4(B, B, V, V), # 0x20-0x23
     OC4(Q, Q, Q, B), # 0x24-0x27
@@ -104,7 +105,7 @@ def make_opcode_format():
     OC4(O, O, U, U), # 0x38-0x3b
     OC4(U, O, B, O), # 0x3c-0x3f
     OC4(O, B, B, O), # 0x40-0x43
-    OC4(B, B, O, U), # 0x44-0x47
+    OC4(B, B, O, B), # 0x44-0x47
     OC4(U, U, U, U), # 0x48-0x4b
     OC4(U, U, U, U), # 0x4c-0x4f
     OC4(V, V, U, V), # 0x50-0x53
@@ -144,7 +145,7 @@ def make_opcode_format():
     OC4(B, B, B, B), # 0xcc-0xcf
 
     OC4(B, B, B, B), # 0xd0-0xd3
-    OC4(B, B, B, B), # 0xd4-0xd7
+    OC4(U, U, U, B), # 0xd4-0xd7
     OC4(B, B, B, B), # 0xd8-0xdb
     OC4(B, B, B, B), # 0xdc-0xdf
 
@@ -155,7 +156,7 @@ def make_opcode_format():
 
     OC4(B, B, B, B), # 0xf0-0xf3
     OC4(B, B, B, B), # 0xf4-0xf7
-    OC4(B, B, B, U), # 0xf8-0xfb
+    OC4(U, U, U, U), # 0xf8-0xfb
     OC4(U, U, U, U), # 0xfc-0xff
     ))
 
@@ -165,18 +166,18 @@ def mp_opcode_format(bytecode, ip, opcode_format=make_opcode_format()):
     ip_start = ip
     f = (opcode_format[opcode >> 2] >> (2 * (opcode & 3))) & 3
     if f == MP_OPCODE_QSTR:
+        if config.MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE:
+            if (opcode == MP_BC_LOAD_NAME
+                or opcode == MP_BC_LOAD_GLOBAL
+                or opcode == MP_BC_LOAD_ATTR
+                or opcode == MP_BC_STORE_ATTR):
+                ip += 1
         ip += 3
     else:
         extra_byte = (
             opcode == MP_BC_RAISE_VARARGS
             or opcode == MP_BC_MAKE_CLOSURE
             or opcode == MP_BC_MAKE_CLOSURE_DEFARGS
-            or config.MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE and (
-                opcode == MP_BC_LOAD_NAME
-                or opcode == MP_BC_LOAD_GLOBAL
-                or opcode == MP_BC_LOAD_ATTR
-                or opcode == MP_BC_STORE_ATTR
-            )
         )
         ip += 1
         if f == MP_OPCODE_VAR_UINT:
@@ -238,7 +239,7 @@ class RawCode:
     def dump(self):
         # dump children first
         for rc in self.raw_codes:
-            rc.freeze()
+            rc.freeze('')
         # TODO
 
     def freeze(self, parent_name):
@@ -258,7 +259,10 @@ class RawCode:
         # generate bytecode data
         print()
         print('// frozen bytecode for file %s, scope %s%s' % (self.source_file.str, parent_name, self.simple_name.str))
-        print('STATIC const byte bytecode_data_%s[%u] = {' % (self.escaped_name, len(self.bytecode)))
+        print('STATIC ', end='')
+        if not config.MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE:
+            print('const ', end='')
+        print('byte bytecode_data_%s[%u] = {' % (self.escaped_name, len(self.bytecode)))
         print('   ', end='')
         for i in range(self.ip2):
             print(' 0x%02x,' % self.bytecode[i], end='')
@@ -274,7 +278,8 @@ class RawCode:
             f, sz = mp_opcode_format(self.bytecode, ip)
             if f == 1:
                 qst = self._unpack_qstr(ip + 1).qstr_id
-                print('   ', '0x%02x,' % self.bytecode[ip], qst, '& 0xff,', qst, '>> 8,')
+                extra = '' if sz == 3 else ' 0x%02x,' % self.bytecode[ip + 3]
+                print('   ', '0x%02x,' % self.bytecode[ip], qst, '& 0xff,', qst, '>> 8,', extra)
             else:
                 print('   ', ''.join('0x%02x, ' % self.bytecode[ip + i] for i in range(sz)))
             ip += sz
@@ -283,7 +288,9 @@ class RawCode:
         # generate constant objects
         for i, obj in enumerate(self.objs):
             obj_name = 'const_obj_%s_%u' % (self.escaped_name, i)
-            if is_str_type(obj) or is_bytes_type(obj):
+            if obj is Ellipsis:
+                print('#define %s mp_const_ellipsis_obj' % obj_name)
+            elif is_str_type(obj) or is_bytes_type(obj):
                 if is_str_type(obj):
                     obj = bytes_cons(obj, 'utf8')
                     obj_type = 'mp_type_str'
@@ -313,8 +320,8 @@ class RawCode:
                     ndigs = len(digs)
                     digs = ','.join(('%#x' % d) for d in digs)
                     print('STATIC const mp_obj_int_t %s = {{&mp_type_int}, '
-                        '{.neg=%u, .fixed_dig=1, .alloc=%u, .len=%u, .dig=(uint%u_t[]){%s}}};'
-                        % (obj_name, neg, ndigs, ndigs, bits_per_dig, digs))
+                        '{.neg=%u, .fixed_dig=1, .alloc=%u, .len=%u, .dig=(uint%u_t*)(const uint%u_t[]){%s}}};'
+                        % (obj_name, neg, ndigs, ndigs, bits_per_dig, bits_per_dig, digs))
             elif type(obj) is float:
                 print('#if MICROPY_OBJ_REPR == MICROPY_OBJ_REPR_A || MICROPY_OBJ_REPR == MICROPY_OBJ_REPR_B')
                 print('STATIC const mp_obj_float_t %s = {{&mp_type_float}, %.16g};'
@@ -324,30 +331,33 @@ class RawCode:
                 print('STATIC const mp_obj_complex_t %s = {{&mp_type_complex}, %.16g, %.16g};'
                     % (obj_name, obj.real, obj.imag))
             else:
-                # TODO
                 raise FreezeError(self, 'freezing of object %r is not implemented' % (obj,))
 
-        # generate constant table
-        print('STATIC const mp_uint_t const_table_data_%s[%u] = {'
-            % (self.escaped_name, len(self.qstrs) + len(self.objs) + len(self.raw_codes)))
-        for qst in self.qstrs:
-            print('    (mp_uint_t)MP_OBJ_NEW_QSTR(%s),' % global_qstrs[qst].qstr_id)
-        for i in range(len(self.objs)):
-            if type(self.objs[i]) is float:
-                print('#if MICROPY_OBJ_REPR == MICROPY_OBJ_REPR_A || MICROPY_OBJ_REPR == MICROPY_OBJ_REPR_B')
-                print('    (mp_uint_t)&const_obj_%s_%u,' % (self.escaped_name, i))
-                print('#elif MICROPY_OBJ_REPR == MICROPY_OBJ_REPR_C')
-                n = struct.unpack('<I', struct.pack('<f', self.objs[i]))[0]
-                n = ((n & ~0x3) | 2) + 0x80800000
-                print('    (mp_uint_t)0x%08x,' % (n,))
-                print('#else')
-                print('#error "MICROPY_OBJ_REPR_D not supported with floats in frozen mpy files"')
-                print('#endif')
-            else:
-                print('    (mp_uint_t)&const_obj_%s_%u,' % (self.escaped_name, i))
-        for rc in self.raw_codes:
-            print('    (mp_uint_t)&raw_code_%s,' % rc.escaped_name)
-        print('};')
+        # generate constant table, if it has any entries
+        const_table_len = len(self.qstrs) + len(self.objs) + len(self.raw_codes)
+        if const_table_len:
+            print('STATIC const mp_rom_obj_t const_table_data_%s[%u] = {'
+                % (self.escaped_name, const_table_len))
+            for qst in self.qstrs:
+                print('    MP_ROM_QSTR(%s),' % global_qstrs[qst].qstr_id)
+            for i in range(len(self.objs)):
+                if type(self.objs[i]) is float:
+                    print('#if MICROPY_OBJ_REPR == MICROPY_OBJ_REPR_A || MICROPY_OBJ_REPR == MICROPY_OBJ_REPR_B')
+                    print('    MP_ROM_PTR(&const_obj_%s_%u),' % (self.escaped_name, i))
+                    print('#elif MICROPY_OBJ_REPR == MICROPY_OBJ_REPR_C')
+                    n = struct.unpack('<I', struct.pack('<f', self.objs[i]))[0]
+                    n = ((n & ~0x3) | 2) + 0x80800000
+                    print('    (mp_rom_obj_t)(0x%08x),' % (n,))
+                    print('#elif MICROPY_OBJ_REPR == MICROPY_OBJ_REPR_D')
+                    n = struct.unpack('<Q', struct.pack('<d', self.objs[i]))[0]
+                    n += 0x8004000000000000
+                    print('    (mp_rom_obj_t)(0x%016x),' % (n,))
+                    print('#endif')
+                else:
+                    print('    MP_ROM_PTR(&const_obj_%s_%u),' % (self.escaped_name, i))
+            for rc in self.raw_codes:
+                print('    MP_ROM_PTR(&raw_code_%s),' % rc.escaped_name)
+            print('};')
 
         # generate module
         if self.simple_name.str != '<module>':
@@ -358,7 +368,10 @@ class RawCode:
         print('    .n_pos_args = %u,' % self.prelude[3])
         print('    .data.u_byte = {')
         print('        .bytecode = bytecode_data_%s,' % self.escaped_name)
-        print('        .const_table = const_table_data_%s,' % self.escaped_name)
+        if const_table_len:
+            print('        .const_table = (mp_uint_t*)const_table_data_%s,' % self.escaped_name)
+        else:
+            print('        .const_table = NULL,')
         print('        #if MICROPY_PERSISTENT_CODE_SAVE')
         print('        .bc_len = %u,' % len(self.bytecode))
         print('        .n_obj = %u,' % len(self.objs))
@@ -435,8 +448,8 @@ def read_mpy(filename):
         header = bytes_cons(f.read(4))
         if header[0] != ord('M'):
             raise Exception('not a valid .mpy file')
-        if header[1] != 0:
-            raise Exception('incompatible version')
+        if header[1] != config.MPY_VERSION:
+            raise Exception('incompatible .mpy version')
         feature_flags = header[2]
         config.MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE = (feature_flags & 1) != 0
         config.MICROPY_PY_BUILTINS_STR_UNICODE = (feature_flags & 2) != 0
@@ -463,8 +476,8 @@ def freeze_mpy(base_qstrs, raw_codes):
     print('#include "py/emitglue.h"')
     print()
 
-    print('#if MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE')
-    print('#error "MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE not supported with frozen mpy files"')
+    print('#if MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE != %u' % config.MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE)
+    print('#error "incompatible MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE"')
     print('#endif')
     print()
 
@@ -497,20 +510,24 @@ def freeze_mpy(base_qstrs, raw_codes):
     print('#endif')
     print()
 
-    print('enum {')
-    for i in range(len(new)):
-        if i == 0:
-            print('    MP_QSTR_%s = MP_QSTRnumber_of,' % new[i][1])
-        else:
-            print('    MP_QSTR_%s,' % new[i][1])
-    print('};')
+    if len(new) > 0:
+        print('enum {')
+        for i in range(len(new)):
+            if i == 0:
+                print('    MP_QSTR_%s = MP_QSTRnumber_of,' % new[i][1])
+            else:
+                print('    MP_QSTR_%s,' % new[i][1])
+        print('};')
+
+    # As in qstr.c, set so that the first dynamically allocated pool is twice this size; must be <= the len
+    qstr_pool_alloc = min(len(new), 10)
 
     print()
     print('extern const qstr_pool_t mp_qstr_const_pool;');
     print('const qstr_pool_t mp_qstr_frozen_const_pool = {')
     print('    (qstr_pool_t*)&mp_qstr_const_pool, // previous pool')
     print('    MP_QSTRnumber_of, // previous pool size')
-    print('    %u, // allocated entries' % len(new))
+    print('    %u, // allocated entries' % qstr_pool_alloc)
     print('    %u, // used entries' % len(new))
     print('    {')
     for _, _, qstr in new:

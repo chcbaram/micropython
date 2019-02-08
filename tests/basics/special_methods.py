@@ -93,6 +93,9 @@ class Cud():
         print("__isub__ called")
         return self
 
+    def __int__(self):
+        return 42
+
 cud1 = Cud()
 cud2 = Cud()
 
@@ -104,43 +107,16 @@ cud1 >= cud2
 cud1 > cud2
 cud1 + cud2
 cud1 - cud2
+print(int(cud1))
 
-# the following require MICROPY_PY_ALL_SPECIAL_METHODS
-+cud1
--cud1
-~cud1
-cud1 * cud2
-cud1 / cud2
-cud2 // cud1
-cud1 += cud2
-cud1 -= cud2
+class BadInt:
+    def __int__(self):
+        print("__int__ called")
+        return None
 
-# TODO: the following operations are not supported on every ports
-#
-# ne is not supported, !(eq) is called instead
-#cud1 != cud2
-#
-# binary and is not supported
-# cud1 & cud2
-#
-# binary lshift is not supported
-# cud1<<1
-#
-# modulus is not supported
-# cud1 % 2
-#
-# binary or is not supported
-# cud1 | cud2
-#
-# pow is not supported
-# cud1**2
-#
-# rshift is not suported
-# cud1>>1
-#
-# xor is not supported
-# cud1^cud2
-#
-# in the followin test, cpython still calls __eq__
-# cud3=cud1
-# cud3==cud1
+try:
+    int(BadInt())
+except TypeError:
+    print("TypeError")
+
+# more in special_methods2.py

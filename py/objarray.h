@@ -24,20 +24,29 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
-#ifndef __MICROPY_INCLUDED_PY_OBJARRAY_H__
-#define __MICROPY_INCLUDED_PY_OBJARRAY_H__
+#ifndef MICROPY_INCLUDED_PY_OBJARRAY_H
+#define MICROPY_INCLUDED_PY_OBJARRAY_H
 
 #include "py/obj.h"
 
+// Used only for memoryview types, set in "typecode" to indicate a writable memoryview
+#define MP_OBJ_ARRAY_TYPECODE_FLAG_RW (0x80)
+
+// This structure is used for all of bytearray, array.array, memoryview
+// objects.  Note that memoryview has different meaning for some fields,
+// see comment at the beginning of objarray.c.
 typedef struct _mp_obj_array_t {
     mp_obj_base_t base;
-    mp_uint_t typecode : 8;
+    size_t typecode : 8;
     // free is number of unused elements after len used elements
     // alloc size = len + free
-    mp_uint_t free : (8 * sizeof(mp_uint_t) - 8);
-    mp_uint_t len; // in elements
+    // But for memoryview, 'free' is reused as offset (in elements) into the
+    // parent object. (Union is not used to not go into a complication of
+    // union-of-bitfields with different toolchains). See comments in
+    // objarray.c.
+    size_t free : (8 * sizeof(size_t) - 8);
+    size_t len; // in elements
     void *items;
 } mp_obj_array_t;
 
-#endif // __MICROPY_INCLUDED_PY_OBJARRAY_H__
+#endif // MICROPY_INCLUDED_PY_OBJARRAY_H

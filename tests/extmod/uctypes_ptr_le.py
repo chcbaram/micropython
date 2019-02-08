@@ -1,9 +1,13 @@
 import sys
-import uctypes
+try:
+    import uctypes
+except ImportError:
+    print("SKIP")
+    raise SystemExit
 
 if sys.byteorder != "little":
     print("SKIP")
-    sys.exit()
+    raise SystemExit
 
 desc = {
     "ptr": (uctypes.PTR | 0, uctypes.UINT8),
@@ -14,9 +18,12 @@ desc = {
 bytes = b"01"
 
 addr = uctypes.addressof(bytes)
-buf = addr.to_bytes(uctypes.sizeof(desc))
+buf = addr.to_bytes(uctypes.sizeof(desc), "little")
 
 S = uctypes.struct(uctypes.addressof(buf), desc, uctypes.LITTLE_ENDIAN)
+
+print(addr == int(S.ptr))
+print(addr == int(S.ptr2))
 
 print(S.ptr[0])
 assert S.ptr[0] == ord("0")
